@@ -1,0 +1,7 @@
+- Folder:tools
+    - 主要用于封装一些常用的函数
+    - image_operations.py 对输入图像的常见操作
+    - Tools.py 封装了一些常用的函数
+    - tools.py 封装了一些深度学习常用的函数
+- Folder: classification
+    - 该文件主要用来解决胃癌的分类问题

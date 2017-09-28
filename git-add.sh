@@ -1,0 +1,11 @@
+git add ./README.md
+git add ./git-add.sh
+git add ./tools/*.py
+git add ./classification/*.py
+git add ./classification/Net/*.py
+git add ./classification/Net/VGG16/*.py
+git add ./classification/Net/VGG16_BasedPatch/*.py
+git add ./classification/dataset/*.py
+git add ./classification/Net/VGG16_Regression/*.py
+git add ./classification/Net/VGG16_NY/*.py
+git add ./classification/Net/ResNet/*.py
