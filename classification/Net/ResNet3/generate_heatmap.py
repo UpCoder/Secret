@@ -35,7 +35,7 @@ label_tensor = tf.placeholder(
     [None]
 )
 logits = inference(img_tensor,
-                   num_classes=2,
+                   num_classes=net_config.OUTPUT_NODE,
                    is_training=False,
                    bottleneck=False)
 
@@ -121,11 +121,10 @@ tf.train.start_queue_runners(sess=sess)
     针对每一个patch分类
 '''
 def generate_prediction(patches):
-
     probability = tf.nn.softmax(logits)
     if FLAGS.resume:
         latest = tf.train.latest_checkpoint(
-            '/home/give/PycharmProjects/StomachCanner/classification/Net/ResNet/models/method4')
+            '/home/give/PycharmProjects/StomachCanner/classification/Net/ResNet3/models/method5/5000.0')
         if not latest:
             print "No checkpoint to continue from in", FLAGS.train_dir
             sys.exit(1)
@@ -150,7 +149,14 @@ def generate_prediction(patches):
         # print 'logits value shape is ', np.shape(probability_value)
         start = end
     probability_values = np.asarray(probability_values, np.float32)
-    return probability_values[:, 1]
+    w = int(math.sqrt(len(probability_values[:, 0])))
+    res_image = np.zeros([w, w, 3], np.uint8)
+    for i in range(net_config.OUTPUT_NODE):
+        probability_value = probability_values[:, i]
+        w = int(math.sqrt(len(probability_value)))
+        probability_image =np.asarray(np.reshape(probability_value, [w, w])) * 255
+        res_image[:, :, i] = probability_image
+    return res_image
 
 '''
     加载已知模型，计算一个tiff文件的heat map
@@ -159,29 +165,33 @@ def generate_prediction(patches):
 '''
 def generate_heatmap(tiff_path, save_path):
     if os.path.exists(save_path):
-        print 'Exists'
+        print 'Exists', tiff_path
         return
+    print tiff_path, ' will doing'
     patches = extract_patchs_return(
         tiff_path=tiff_path,
         mask_dir=None,
         occupy_rate=None,
         stride=16,
-        patch_size=256
+        patch_size=512
     )
+    new_patches = []
+    for patch in patches:
+        img = Image.fromarray(patch)
+        img = img.resize([net_config.IMAGE_W, net_config.IMAGE_H])
+        new_patches.append(np.array(img))
+    patches = new_patches
     patches = np.asarray(patches, np.float32)
     for index, patch in enumerate(patches):
         patch = np.asarray(patch, np.float32)
         patch = patch * (1.0 / np.max(patch))
         patches[index] = patch
-    probability_value = generate_prediction(patches)
-    print np.max(probability_value), np.min(probability_value)
-    print probability_value
-    w = int(math.sqrt(len(probability_value)))
-    probability_img = Image.fromarray(np.asarray(np.reshape(probability_value, [w, w]) * 255, np.uint8))
+    res_image = generate_prediction(patches)
+    res_img = Image.fromarray(np.asarray(res_image, np.uint8))
     if save_path is not None:
-        probability_img.save(save_path)
+        res_img.save(save_path)
     else:
-        probability_img.show()
+        res_img.show()
 
 
 '''
@@ -203,26 +213,56 @@ def generate_heatmap_one_floder(tiff_dir, save_dir):
      :param save_dirs 对上面参数对应的保存的路径
      
 '''
-def generate_heatmap_multi_floder(tiff_dirs, save_dirs):
+def generate_heatmap_multi_floder(tiff_dirs, save_dirs, process_num=1):
+    # from multiprocessing import Process
+    # def single_process(tiff_paths, names, process_id):
+    #     print 'process id: ', process_id
+    #     for index, tiff_path in enumerate(tiff_paths):
+    #         name = names[index].split('.tiff')[0]
+    #         generate_heatmap(tiff_path, os.path.join(save_dir, name+'.png'))
+    # for tiff_dir_index, tiff_dir in enumerate(tiff_dirs):
+    #     save_dir = save_dirs[tiff_dir_index]
+    #     names = os.listdir(tiff_dir)
+    #     tiff_paths = [os.path.join(tiff_dir, name) for name in names]
+    #     pre_process_num = int(len(tiff_paths) / process_num + 1)
+    #     start = 0
+    #     processes = []
+    #     for i in range(process_num):
+    #         end = start + pre_process_num
+    #         if end > len(tiff_paths):
+    #             end = tiff_paths
+    #         process = Process(target=single_process, args=[
+    #             tiff_paths[start:end], names[start:end], i,
+    #         ])
+    #         process.start()
+    #         processes.append(process)
+    #     for process in processes:
+    #         process.join()
     for tiff_dir_index, tiff_dir in enumerate(tiff_dirs):
         save_dir = save_dirs[tiff_dir_index]
         names = os.listdir(tiff_dir)
         tiff_paths = [os.path.join(tiff_dir, name) for name in names]
         for index, tiff_path in enumerate(tiff_paths):
             name = names[index].split('.tiff')[0]
-            generate_heatmap(tiff_path, os.path.join(save_dir, name+'.png'))
+            generate_heatmap(tiff_path, os.path.join(save_dir, name + '.png'))
 
 if __name__ == '__main__':
+    # generate_heatmap('/home/give/Documents/dataset/BOT_Game/val/positive/2017-06-10_19.46.43.ndpi.16.46032_19684.2048x2048.tiff',
+    #                  '/home/give/Documents/dataset/BOT_Game/train/positive-hm/method5/2017-06-10_19.46.43.ndpi.16.46032_19684.2048x2048.png')
     generate_heatmap_multi_floder(
         tiff_dirs=[
+            '/home/give/Documents/dataset/BOT_Game/train/negative',
+            '/home/give/Documents/dataset/BOT_Game/train/positive',
+            '/home/give/Documents/dataset/BOT_Game/val/negative',
             '/home/give/Documents/dataset/BOT_Game/val/positive',
-            '/home/give/Documents/dataset/BOT_Game/val/negative'
-            # '/home/give/Documents/dataset/BOT_Game/0-testdataset'
+            '/home/give/Documents/dataset/BOT_Game/0-testdataset'
         ],
         save_dirs=[
-            # '/home/give/Documents/dataset/BOT_Game/0-testdataset-hm'
-            '/home/give/Documents/dataset/BOT_Game/val/positive-hm',
-            '/home/give/Documents/dataset/BOT_Game/val/negative-hm'
+            '/home/give/Documents/dataset/BOT_Game/train/negative-hm/method5',
+            '/home/give/Documents/dataset/BOT_Game/train/positive-hm/method5',
+            '/home/give/Documents/dataset/BOT_Game/val/negative-hm/method5',
+            '/home/give/Documents/dataset/BOT_Game/val/positive-hm/method5',
+            '/home/give/Documents/dataset/BOT_Game/0-testdataset-hm/method5'
         ]
     )
     # from tools.image_operations import read_images

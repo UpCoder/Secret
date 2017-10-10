@@ -7,7 +7,7 @@ import gc
 import os
 from skimage.measure import regionprops
 from glob import glob
-
+import math
 
 # 读取ｔｉｆｆ文件
 def tiff_read(image_path, new_size=None):
@@ -871,7 +871,32 @@ def extract_patch_method3(image_dir, mask_dir, patch_size, stride_size, occupy_r
             args=[cur_pathes, mask_dir, patch_size, stride_size, occupy_rate, save_dir,]
         )
         process.start()
-
+'''
+    根据一个单联通分量的ｍａｓｋ和一个ｐａｔｃｈｓｉｚｅ得到一个完整的图，不够的话，两边填充，越界的时候，优先左右填充
+'''
+def get_single_patch(image, mask_image, patch_size):
+    def get_centerpos(mask_image):
+        regions = regionprops(np.array(mask_image))
+        return regions[0]['centroid']
+    [w, h] = list(np.shape(mask_image))
+    pos = get_centerpos(mask_image)
+    rl = int(pos[0] - patch_size/2)
+    rr = int(pos[0] + patch_size/2)
+    cl = int(pos[1] - patch_size/2)
+    cr = int(pos[1] + patch_size/2)
+    if rl < 0:
+        rr += (0-rl)
+        rl =0
+    if rr > w:
+        rl -= (rr - w)
+        rr = w
+    if cl < 0:
+        cr += (0-cl)
+        cl = 0
+    if cr > h:
+        cl -= (cr - h)
+        cr = h
+    return image[rl:rr, cl:cr]
 '''
     提取patch 方法四
     针对每个联通分量
@@ -898,11 +923,11 @@ def extract_patch_method4(image_dir, mask_dir, patch_size, stride_size, occupy_r
                     continue
                 # 不剔除该mask
                 bounding = bounding_box(mask_image)
-                category_patch1 = image[bounding[0]:bounding[1], bounding[2]: bounding[3]]
-                save_image(
-                    category_patch1,
-                    os.path.join(save_dir, basename+'_' + str(index) + '_0.png')
-                )
+                # category_patch1 = image[bounding[0]:bounding[1], bounding[2]: bounding[3]]
+                # save_image(
+                #     category_patch1,
+                #     os.path.join(save_dir, basename+'_' + str(index) + '_0.png')
+                # )
                 count += 1
                 for i in range(bounding[0], bounding[1], stride_size):
                     for j in range(bounding[2], bounding[3], stride_size):
@@ -912,6 +937,7 @@ def extract_patch_method4(image_dir, mask_dir, patch_size, stride_size, occupy_r
                                    j - patch_size / 2:j + patch_size / 2]
                         cur_rate = ((1.0 * np.sum(cur_mask != 0)) / (1.0 * patch_size * patch_size))
                         if cur_rate == 1.0:
+                            # 如果ｐａｔｃｈ完全落在癌变区域，则剔除该ｐａｔｃｈ
                             continue
                         if cur_rate >= occupy_rate:
                             count += 1
@@ -919,6 +945,11 @@ def extract_patch_method4(image_dir, mask_dir, patch_size, stride_size, occupy_r
                                                      basename + '_' + str(index) + '_' + str(i) + '_' + str(j) + '_'
                                                      + str(cur_rate) + '.png')
                             save_image(cur_patch, save_path)
+                if count == 1:
+                    patch = get_single_patch(image, mask_image, patch_size)
+                    save_image(patch, os.path.join(save_dir, basename+'_' + str(index) + '_0.png'))
+                else:
+                    count -= 1
                 print mask_path, ' patch num: ', count
     image_names = os.listdir(image_dir)
     image_pathes = [os.path.join(image_dir, image_name) for image_name in image_names]
@@ -934,6 +965,102 @@ def extract_patch_method4(image_dir, mask_dir, patch_size, stride_size, occupy_r
         process = Process(
             target=single_process,
             args=[cur_pathes, mask_dir, patch_size, stride_size, occupy_rate, save_dir,]
+        )
+        process.start()
+'''
+    提取patch 方法五
+    针对每个联通分量
+        我们使用多种不同的尺寸Bounding Box来提取Patch，只有每个Patch都满足要求了才将其保存下来，否则不保存
+        保存的形式:
+            针对每一个病例切片，我们保存成一个文件夹，文件夹的命名就是病例切片的名字
+                针对每一组ｐａｔｃｈ我们保存成一个文件夹，命名方式是计数器的方式
+                    针对不同ｐａｔｃｈ我们命名的方式是ｓｉｚｅ
+'''
+def extract_patch_method5(image_dir, mask_dir, patch_sizes, stride_size, occupy_rate, save_dir, process_num=8):
+
+    def bounding_box(mask_image):
+        xs, ys = np.where(mask_image != 0)
+        return np.min(xs), np.max(xs), np.min(ys), np.max(ys)
+    def get_whole(mask_image, image, bounding):
+        r_sqrt = int(math.sqrt(np.sum(mask_image != 0)))
+        # expand_mask = expand
+    def single_process(image_pathes, mask_dir, patch_sizes, stride_size, occupy_rate, save_dir):
+        for image_path in image_pathes:
+            image = read_image(image_path)
+            image = np.array(image)
+            basename = os.path.basename(image_path).split('.tiff')[0]
+            mask_pathes = glob(os.path.join(mask_dir, basename+'_*.png'))
+
+            for index, mask_path in enumerate(mask_pathes):
+                # 针对每一个联通分量
+                new_path = os.path.join(save_dir, os.path.basename(mask_path))
+                if not os.path.exists(new_path):
+                    os.mkdir(new_path)
+                    print 'mkdir ', new_path
+                count = 0
+                mask_image = read_image(mask_path)
+                mask_image = np.array(mask_image)
+                if np.sum(mask_image == 255) <= 100:
+                    print 'jump on: ', mask_path, ' sum is: ', np.sum(mask_image == 255)
+                    continue
+                # 不剔除该mask
+                bounding = bounding_box(mask_image)
+                # category_patch1 = image[bounding[0]:bounding[1], bounding[2]: bounding[3]]
+                # save_image(
+                #     category_patch1,
+                #     os.path.join(save_dir, basename+'_' + str(index) + '_0.png')
+                # )
+                # count += 1
+                for i in range(bounding[0], bounding[1], stride_size):
+                    for j in range(bounding[2], bounding[3], stride_size):
+                        patches = []
+                        flag = True
+                        for patch_size in patch_sizes:
+                            cur_patch = image[i - patch_size / 2:i + patch_size / 2,
+                                        j - patch_size / 2:j + patch_size / 2]
+                            cur_mask = mask_image[i - patch_size / 2:i + patch_size / 2,
+                                       j - patch_size / 2:j + patch_size / 2]
+                            cur_rate = ((1.0 * np.sum(cur_mask != 0)) / (1.0 * patch_size * patch_size))
+                            # if cur_rate == 1.0:
+                            #     # 完全在内部的不要
+                            #     continue
+                            if cur_rate >= occupy_rate:
+                                patches.append(cur_patch)
+                                # save_path = os.path.join(save_dir,
+                                #                          basename + '_' + str(index) + '_' + str(i) + '_' + str(j) + '_'
+                                #                          + str(cur_rate) + '.png')
+                                # save_image(cur_patch, save_path)
+                            else:
+                                flag = False
+                                break
+                        if flag:
+                            new_save_path = os.path.join(new_path, str(count))
+                            count += 1
+                            if not os.path.exists(new_save_path):
+                                os.mkdir(new_save_path)
+                            for index, patch in enumerate(patches):
+                                save_image(
+                                    patch,
+                                    os.path.join(new_save_path, str(patch_sizes[index]) + '.png')
+                                )
+
+                print mask_path, ' patch num: ', count
+                if count == 0:
+                    os.rmdir(new_path)
+    image_names = os.listdir(image_dir)
+    image_pathes = [os.path.join(image_dir, image_name) for image_name in image_names]
+    start = 0
+    per_process = len(image_pathes) / process_num + 1
+    from multiprocessing import Process
+    for i in range(process_num):
+        end = start + per_process
+        if end > len(image_pathes):
+            end = len(image_pathes)
+        cur_pathes = image_pathes[start: end]
+        start = end
+        process = Process(
+            target=single_process,
+            args=[cur_pathes, mask_dir, patch_sizes, stride_size, occupy_rate, save_dir,]
         )
         process.start()
 '''
@@ -956,6 +1083,123 @@ def read_images(image_dir):
     names = os.listdir(image_dir)
     images = [np.array(tiff_read(os.path.join(image_dir, name))) for name in names]
     return images
+
+'''
+    提取细胞
+'''
+def extract_cell_patch(image_dir, mask_dir, patch_size, stride_size, occupy_rate, save_dir, process_num=8):
+    def bounding_box(mask_image):
+        xs, ys = np.where(mask_image != 0)
+        return np.min(xs), np.max(xs), np.min(ys), np.max(ys)
+    def single_process(image_pathes, mask_dir, patch_size, stride_size, occupy_rate, save_dir):
+        for image_path in image_pathes:
+            image = read_image(image_path)
+            image = np.array(image)
+            basename = os.path.basename(image_path).split('.png')[0]
+            basename1 = basename.replace('.', '_')
+            mask_pathes = glob(os.path.join(mask_dir, basename1+'*.png'))
+            for index, mask_path in enumerate(mask_pathes):
+                # 针对每一个联通分量
+                count = 0
+                mask_image = read_image(mask_path)
+                mask_image = np.array(mask_image)
+                if np.sum(mask_image == 255) <= 100:
+                    print 'jump on: ', mask_path, ' sum is: ', np.sum(mask_image == 255)
+                    continue
+                # 不剔除该mask
+                bounding = bounding_box(mask_image)
+                # category_patch1 = image[bounding[0]:bounding[1], bounding[2]: bounding[3]]
+                # save_image(
+                #     category_patch1,
+                #     os.path.join(save_dir, basename+'_' + str(index) + '_0.png')
+                # )
+                count += 1
+                for i in range(bounding[0], bounding[1], stride_size):
+                    for j in range(bounding[2], bounding[3], stride_size):
+                        cur_patch = image[i - patch_size / 2:i + patch_size / 2,
+                                    j - patch_size / 2:j + patch_size / 2]
+                        cur_mask = mask_image[i - patch_size / 2:i + patch_size / 2,
+                                   j - patch_size / 2:j + patch_size / 2]
+                        cur_rate = ((1.0 * np.sum(cur_mask != 0)) / (1.0 * patch_size * patch_size))
+                        if cur_rate >= occupy_rate:
+                            count += 1
+                            save_path = os.path.join(save_dir,
+                                                     basename + '_' + str(index) + '_' + str(i) + '_' + str(j) + '_'
+                                                      + str(patch_size) + '_' + str(cur_rate) + '.png')
+                            save_image(cur_patch, save_path)
+                print mask_path, ' patch num: ', count
+    image_names = os.listdir(image_dir)
+    image_pathes = [os.path.join(image_dir, image_name) for image_name in image_names]
+    start = 0
+    per_process = len(image_pathes) / process_num + 1
+    from multiprocessing import Process
+    for i in range(process_num):
+        end = start + per_process
+        if end > len(image_pathes):
+            end = len(image_pathes)
+        cur_pathes = image_pathes[start: end]
+        start = end
+        process = Process(
+            target=single_process,
+            args=[cur_pathes, mask_dir, patch_size, stride_size, occupy_rate, save_dir,]
+        )
+        process.start()
+
+'''
+    提取其他组织
+'''
+def extract_other_patch(image_dir, mask_dir, patch_size, stride_size, occupy_rate, save_dir, process_num=8):
+    def bounding_box(mask_image):
+        xs, ys = np.where(mask_image != 0)
+        return np.min(xs), np.max(xs), np.min(ys), np.max(ys)
+    def single_process(image_pathes, mask_dir, patch_size, stride_size, occupy_rate, save_dir):
+        for image_path in image_pathes:
+            image = read_image(image_path)
+            image = np.array(image)
+            basename = os.path.basename(image_path).split('.png')[0]
+            basename1 = basename.replace('.', '_')
+            mask_pathes = glob(os.path.join(mask_dir, basename1+'*.png'))
+            for index, mask_path in enumerate(mask_pathes):
+                # 针对每一个联通分量
+                count = 0
+                mask_image = read_image(mask_path)
+                mask_image = np.array(mask_image)
+                # 不剔除该mask
+                # category_patch1 = image[bounding[0]:bounding[1], bounding[2]: bounding[3]]
+                # save_image(
+                #     category_patch1,
+                #     os.path.join(save_dir, basename+'_' + str(index) + '_0.png')
+                # )
+                count += 1
+                for i in range(patch_size/2, 2048-patch_size/2, stride_size):
+                    for j in range(patch_size/2, 2048-patch_size/2, stride_size):
+                        cur_patch = image[i - patch_size / 2:i + patch_size / 2,
+                                    j - patch_size / 2:j + patch_size / 2]
+                        cur_mask = mask_image[i - patch_size / 2:i + patch_size / 2,
+                                   j - patch_size / 2:j + patch_size / 2]
+                        if np.sum(cur_mask != 0) == 0:
+                            count += 1
+                            save_path = os.path.join(save_dir,
+                                                     basename + '_' + str(index) + '_' + str(i) + '_' + str(j) + '_'
+                                                      + str(patch_size) + '.png')
+                            save_image(cur_patch, save_path)
+                print mask_path, ' patch num: ', count
+    image_names = os.listdir(image_dir)
+    image_pathes = [os.path.join(image_dir, image_name) for image_name in image_names]
+    start = 0
+    per_process = len(image_pathes) / process_num + 1
+    from multiprocessing import Process
+    for i in range(process_num):
+        end = start + per_process
+        if end > len(image_pathes):
+            end = len(image_pathes)
+        cur_pathes = image_pathes[start: end]
+        start = end
+        process = Process(
+            target=single_process,
+            args=[cur_pathes, mask_dir, patch_size, stride_size, occupy_rate, save_dir,]
+        )
+        process.start()
 if __name__ == '__main__':
     # conver_all_svgs('/home/give/Game/GastricCancer/labels', '/home/give/Documents/dataset/BOT_Game/labels')
     # tiff_path = '/home/give/Documents/dataset/BOT_Game/train/negative/normal1.ndpi.16.5702_35104.2048x2048.tiff'
@@ -1060,10 +1304,10 @@ if __name__ == '__main__':
     #     occupy_rate=0.5,
     #     save_dir='/home/give/Documents/dataset/BOT_Game/patches/256-all-histeq/val/positive'
     # )
-    extract_patches_one_folder_num(save_dir='/home/give/Documents/dataset/BOT_Game/patches/method4/val/negative',
-                                   patch_size=256,
-                                   all_num=2200,
-                                   tiff_dir='/home/give/Documents/dataset/BOT_Game/val/negative')
+    # extract_patches_one_folder_num(save_dir='/home/give/Documents/dataset/BOT_Game/patches/method5/train/negative',
+    #                                patch_size=512,
+    #                                all_num=20000,
+    #                                tiff_dir='/home/give/Documents/dataset/BOT_Game/train/negative')
 
     # delete_positive_pathc(
     #     '/home/give/Documents/dataset/BOT_Game/patches/256-delete-patch/val/positive',
@@ -1120,12 +1364,22 @@ if __name__ == '__main__':
     #     '/home/give/Documents/dataset/BOT_Game/train/positive-test'
     # )
 
+    extract_other_patch(
+        image_dir='/home/give/Documents/dataset/BOT_Game/train/negative-multi/data',
+        mask_dir='/home/give/Documents/dataset/BOT_Game/train/negative-multi/mask',
+        save_dir='/home/give/Documents/dataset/BOT_Game/patches/method5/train/other-512',
+        occupy_rate=0.6,
+        patch_size=512,
+        stride_size=100,
+        process_num=8
+    )
+
     # extract_patch_method4(
-    #     image_dir='/home/give/Documents/dataset/BOT_Game/val/positive',
+    #     image_dir='/home/give/Documents/dataset/BOT_Game/train/positive',
     #     mask_dir='/home/give/Documents/dataset/BOT_Game/fill_label_splited',
-    #     save_dir='/home/give/Documents/dataset/BOT_Game/patches/method4/val/positive',
-    #     occupy_rate=0.6,
-    #     patch_size=256,
+    #     save_dir='/home/give/Documents/dataset/BOT_Game/patches/method5/train/positive-512',
+    #     occupy_rate=0.5,
+    #     patch_size=512,
     #     stride_size=128,
     #     process_num=8
     # )

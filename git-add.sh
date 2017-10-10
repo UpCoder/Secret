@@ -9,3 +9,5 @@ git add ./classification/dataset/*.py
 git add ./classification/Net/VGG16_Regression/*.py
 git add ./classification/Net/VGG16_NY/*.py
 git add ./classification/Net/ResNet/*.py
+git add ./classification/Net/ResNet3/*.py
+git add ./classification/Net/ResNetHeatMap/*.py
